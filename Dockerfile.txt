@@ -1,0 +1,103 @@
+/etc/init/docker-registry.conf 
+==============================
+description "Docker Registry"
+start on runlevel [2345]
+stop on runlevel [016]
+respawn
+respawn limit 10 5
+script
+exec gunicorn --access-logfile /var/log/docker-registry/access.log --error-logfile /var/log/docker-registry/server.log -k gevent --max-requests 100 --graceful-timeout 3600 -t 3600 -b localhost:5000 -w 8 docker_registry.wsgi:application
+end script
+
+
+
+/etc/nginx/sites-available/docker-registry 
+========================================
+upstream docker-registry {
+ server localhost:5000;
+}
+server {
+ listen 8080;
+ server_name my.docker.registry.com;
+ # ssl on;
+ # ssl_certificate /etc/ssl/certs/docker-registry;
+ # ssl_certificate_key /etc/ssl/private/docker-registry;
+ proxy_set_header Host       $http_host;   # required for Docker client sake
+ proxy_set_header X-Real-IP  $remote_addr; # pass on real client IP
+ client_max_body_size 0; # disable any limits to avoid HTTP 413 for large image uploads
+ # required to avoid HTTP 411: see Issue #1486 (https://github.com/dotcloud/docker/issues/1486)
+ chunked_transfer_encoding on;
+ location / {
+     # let Nginx know about our auth file
+     auth_basic              "Restricted";
+     auth_basic_user_file    docker-registry.htpasswd;
+     proxy_pass http://docker-registry;
+ } location /_ping {
+     auth_basic off;
+     proxy_pass http://docker-registry;
+ }   location /v1/_ping {
+     auth_basic off;
+     proxy_pass http://docker-registry;
+ }
+}
+
+
+==============================
+FROM ubuntu:latest
+MAINTAINER Kim HyunDo <websider21@gmail.com>
+
+RUN apt-get update && apt-get install -y apache2
+
+EXPOSE 80
+CMD ["/usr/sbin/apache2ctl", "-D", "FOREGROUND"]
+
+
+Creating a MySQL username, database, and setting permissions
+=======================================
+FROM ubuntu:latest
+MAINTAINER Kim HyunDo <websider21@gmail.com>
+RUN apt-get update && apt-get install -y mysql mysql-server
+ENV username mysqluser
+ENV password pass
+ENV database db2
+ADD databasesetup.sh /
+RUN chmod 644 /databasesetup.sh
+RUN "/usr/bin/sh databasesetup.sh"
+EXPOSE 3306
+CMD ["/usr/bin/mysqld_safe"]
+
+databasesetup.sh
+========================
+#!/bin/bash
+/usr/bin/mysqld_safe
+  mysql -uroot -e "CREATE USER '${username}'@'%' IDENTIFIED BY '${password}'"
+  mysql -uroot -e "GRANT ALL PRIVILEGES ON '${database}'.* TO '${username}'@'%' WITH GRANT OPTION"
+mysqladmin -uroot shutdown
+
+
+add file to system
+===================
+FROM ubuntu:latest
+MAINTAINER Kim HyunDo <websider21@gmail.com>
+RUN apt-get update && apt-get install -y memcached
+ADD memcached /etc/default/
+ENV MEMCACHESIZE 2048
+EXPOSE 11211
+CMD ["/usr/bin/memcached -u root"]
+
+===================
+FROM ubuntu:latest
+MAINTAINER Kim HyunDo <websider21@gmail.com>
+VOLUME /MountPointDemo
+RUN date > /MountPointDemo/date.txt
+RUN cat /MountPointDemo/date.txt
+
+====================
+FROM fedora:22
+MAINTAINER Kim HyunDo email websider21@gmail.com
+# Update the system
+RUN yum -y update; yum clean all
+# Install httpd
+RUN yum -y install httpd
+EXPOSE 80 443
+ENTRYPOINT /usr/sbin/httpd -DFOREGROUND
